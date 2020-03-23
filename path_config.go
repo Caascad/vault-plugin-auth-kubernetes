@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"io/ioutil"
+	"os"
 
 	"github.com/briankassouf/jose/jws"
 	"github.com/hashicorp/vault/sdk/framework"
@@ -92,6 +94,9 @@ func (b *kubeAuthBackend) pathConfigRead(ctx context.Context, req *logical.Reque
 
 // pathConfigWrite handles create and update commands to the config
 func (b *kubeAuthBackend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	k8sCaCertPath := "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+	k8sJWTTokenPath := "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
 	host := data.Get("kubernetes_host").(string)
 	if host == "" {
 		return logical.ErrorResponse("no host provided"), nil
@@ -99,12 +104,30 @@ func (b *kubeAuthBackend) pathConfigWrite(ctx context.Context, req *logical.Requ
 
 	pemList := data.Get("pem_keys").([]string)
 	caCert := data.Get("kubernetes_ca_cert").(string)
+	if len(caCert) == 0 {
+		if _, err := os.Stat(k8sCaCertPath); !os.IsNotExist(err) {
+			if caCertData, err := ioutil.ReadFile(k8sCaCertPath); err == nil {
+				caCert = string(caCertData)
+			} else {
+				return logical.ErrorResponse("failed to read %s: %s", k8sCaCertPath, err), nil
+			}
+		}
+	}
 	issuer := data.Get("issuer").(string)
 	if len(pemList) == 0 && len(caCert) == 0 {
 		return logical.ErrorResponse("one of pem_keys or kubernetes_ca_cert must be set"), nil
 	}
 
 	tokenReviewer := data.Get("token_reviewer_jwt").(string)
+	if len(tokenReviewer) == 0 {
+		if _, err := os.Stat(k8sJWTTokenPath); !os.IsNotExist(err) {
+			if tokenReviewerData, err := ioutil.ReadFile(k8sJWTTokenPath); err == nil {
+				tokenReviewer = string(tokenReviewerData)
+			} else {
+				return logical.ErrorResponse("failed to read %s: %s", k8sJWTTokenPath, err), nil
+			}
+		}
+	}
 	if len(tokenReviewer) > 0 {
 		// Validate it's a JWT
 		_, err := jws.ParseJWT([]byte(tokenReviewer))
